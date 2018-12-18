@@ -46,69 +46,68 @@ def create_vocabulary(sentences, r=200):
     
     return vocabulary
 
-def create_corpus_matrix(sentences, vocabulary, L = 2):
-    words_counts = Counter()
-    for sentence_index, sentence in enumerate(sentences):
-        for word_index, word in enumerate(sentence):
-            if word in vocabulary:
-                around_indexes = [i for i in range(max(word_index - L, 0), 
-                                                   min(word_index + L + 1, len(sentence))) 
-                                  if i != word_index]
-                for occur_word_index in around_indexes:
-                        occur_word = sentence[occur_word_index]
-                        if occur_word in vocabulary:
-                            skipgram = (word, occur_word)
-                            if skipgram in words_counts:
-                                words_counts[skipgram] += 1
-                            else:
-                                words_counts[skipgram] = 1
-    rows = list()
-    cols = list()
-    values = list()
-    
-    for (word_1, word_2), sharp in words_counts.items():                                            
-        rows.append(vocabulary[word_1])
-        cols.append(vocabulary[word_2])
-        values.append(sharp)
-    
-    corpus_matrix = sparse.csr_matrix((values, (rows, cols)))
-    
-    return corpus_matrix
-
-def compute_embeddings(corpus_matrix, k, d=200, alpha=0.5):
+def create_matrix_D(data, vocab, window_size=5):
     """
-        PS2 embedding_computer from HW, one more example
+    Create a co-occurrence matrix D from training corpus.
     """
-    all_observations = corpus_matrix.sum()
 
-    rows = []
-    cols = []
-    sppmi_values = []
+    dim = len(vocab)
+    D = np.zeros((dim, dim))
+    s = window_size // 2
+            
+    for sentence in data:
+        l = len(sentence)
+        for i in range(l):
+            for j in range(max(0,i - s), min(i + s + 1,l)):
+                if (i != j and sentence[i] in vocab 
+                    and sentence[j] in vocab):
+                    c = vocab[sentence[j]]
+                    w = vocab[sentence[i]]
+                    D[c][w] += 1                  
+    return D        
 
-    sum_over_words = np.array(corpus_matrix.sum(axis=0)).flatten()
-    sum_over_contexts = np.array(corpus_matrix.sum(axis=1)).flatten()
 
-    for word_index_1, word_index_2 in zip(corpus_matrix.nonzero()[0], 
-                                          corpus_matrix.nonzero()[1]):
+def create_matrix_B(D, k):
+    """
+    Create matrix B (defined in init).
+    """
+        
+    c_ = D.sum(axis=1)
+    w_ = D.sum(axis=0)
+    P = D.sum()
 
-        sg_count = corpus_matrix[word_index_1, word_index_2]
+    w_v, c_v = np.meshgrid(w_, c_)
+    B = k * (w_v * c_v)/float(P)
+    return B
 
-        pwc = sg_count
-        pw = sum_over_contexts[word_index_1]
-        pc = sum_over_words[word_index_2]
+def sigmoid(X):
+    """
+    Sigmoid function sigma(x)=1/(1+e^{-x}) of matrix X.
+    """
+    Y = X.copy()
+        
+    Y[X>20] = 1-1e-6
+    Y[X<-20] = 1e-6
+    Y[(X<20)&(X>-20)] = 1 / (1 + np.exp(-X[(X<20)&(X>-20)]))
+        
+    return Y
 
-        spmi_value = np.log2(pwc * all_observations / (pw * pc * k))
-        sppmi_value = max(spmi_value, 0)
-
-        rows.append(word_index_1)
-        cols.append(word_index_2)
-        sppmi_values.append(sppmi_value)
-
-    sppmi_mat = sparse.csr_matrix((sppmi_values, (rows, cols)))
-    U, S, V = linalg.svds(sppmi_mat, 200)
-    embedding_matrix = U @ scipy.diag(scipy.power(S, alpha))
+def MF(D, B, X):
+    """
+    Objective MF(D,C^TW) we want to minimize.
+    """
     
-    return embedding_matrix
+    MF = D * np.log(sigmoid(X)) + B * np.log(sigmoid(-X))
+    return MF, -MF.mean()
+
+
+def grad_MF(X, D, B):
+    """
+    Gradient of the functional MF(D,C^TW) over C^TW.
+    """
+    
+    grad = D * sigmoid(-X) - B * sigmoid(X)
+    return grad
 
 class Word2VecController:
     """
